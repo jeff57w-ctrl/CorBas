@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CorBas - Corpus Inspection Tool</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.95;
+        }
+
+        .loading-status {
+            background: #f8f9fa;
+            padding: 20px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .status-item.loading {
+            border-left-color: #ffc107;
+        }
+
+        .status-item.complete {
+            border-left-color: #28a745;
+        }
+
+        .status-item.error {
+            border-left-color: #dc3545;
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .checkmark {
+            color: #28a745;
+            font-size: 20px;
+            margin-right: 10px;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .tabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            font-size: 1em;
+            color: #6c757d;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .tab:hover {
+            color: #667eea;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .input-section {
+            margin-bottom: 30px;
+        }
+
+        .input-section h3 {
+            margin-bottom: 15px;
+            color: #333;
+            font-size: 1.3em;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 200px;
+            padding: 15px;
+            border: 2px solid #dee2e6;
+            border-radius: 10px;
+            font-size: 1em;
+            font-family: 'Courier New', monospace;
+            resize: vertical;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .file-upload {
+            border: 3px dashed #dee2e6;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: #f8f9fa;
+        }
+
+        .file-upload:hover {
+            border-color: #667eea;
+            background: #e7f1ff;
+        }
+
+        .file-upload.dragover {
+            border-color: #667eea;
+            background: #e7f1ff;
+        }
+
+        .button {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: transform 0.2s;
+            font-weight: 600;
+            margin: 5px;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+        }
+
+        .button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .button-secondary {
+            background: #6c757d;
+        }
+
+        .results {
+            margin-top: 30px;
+        }
+
+        .corpus-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .corpus-item {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .corpus-item:hover {
+            background: #e7f1ff;
+            transform: translateX(5px);
+        }
+
+        .corpus-item h4 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .corpus-item p {
+            color: #6c757d;
+            font-size: 0.9em;
+        }
+
+        .analysis-output {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .kwic-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 0.9em;
+        }
+
+        .kwic-table th {
+            background: #667eea;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .kwic-table td {
+            padding: 10px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .kwic-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .left-context {
+            text-align: right;
+            color: #6c757d;
+        }
+
+        .node {
+            font-weight: bold;
+            color: #667eea;
+            padding: 0 10px;
+        }
+
+        .right-context {
+            color: #6c757d;
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            margin: 2px;
+            font-family: monospace;
+        }
+
+        .tag-pos {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .tag-dep {
+            background: #cce5ff;
+            color: #004085;
+        }
+
+        .tag-sem {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .search-box {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+
+        .search-box input {
+            flex: 1;
+            min-width: 200px;
+            padding: 12px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            font-size: 1em;
+        }
+
+        .search-box input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .svg-container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            overflow-x: auto;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.8em;
+            }
+            
+            .tabs {
+                flex-direction: column;
+            }
+
+            .tab {
+                width: 100%;
+                text-align: left;
+            }
+
+            .corpus-list {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .freq-list {
+            columns: 2;
+            column-gap: 20px;
+        }
+
+        .freq-item {
+            break-inside: avoid;
+            padding: 8px;
+            margin: 5px 0;
+            background: white;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            max-width: 500px;
+            width: 90%;
+        }
+
+        .modal-content h3 {
+            margin-bottom: 20px;
+        }
+
+        .modal-content input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 2px solid #dee2e6;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔬 CorBas</h1>
+            <p>Corpus Inspection Tool - University of Basra</p>
+        </div>
+
+        <div class="loading-status" id="loadingStatus">
+            <div class="status-item loading">
+                <div class="spinner"></div>
+                <span>Initializing Pyodide (Python runtime)...</span>
+            </div>
+            <div class="status-item" id="spacyStatus">
+                <div class="spinner" style="display:none;"></div>
+                <span>⏳ Waiting to load spaCy...</span>
+            </div>
+            <div class="status-item" id="pymusasStatus">
+                <div class="spinner" style="display:none;"></div>
+                <span>⏳ Waiting to load PyMUSAS...</span>
+            </div>
+        </div>
+
+        <div class="content" id="mainContent" style="display:none;">
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('input')">📝 Input</button>
+                <button class="tab" onclick="switchTab('corpus')">📚 Corpus Manager</button>
+                <button class="tab" onclick="switchTab('concordance')">🔍 Concordance</button>
+                <button class="tab" onclick="switchTab('frequency')">📊 Frequency</button>
+                <button class="tab" onclick="switchTab('collocation')">🔗 Collocation</button>
+                <button class="tab" onclick="switchTab('tags')">🏷️ Tag Search</button>
+                <button class="tab" onclick="switchTab('syntax')">🌳 Syntax Trees</button>
+            </div>
+
+            <!-- Input Tab -->
+            <div id="input-tab" class="tab-content active">
+                <div class="input-section">
+                    <h3>Enter Text</h3>
+                    <textarea id="textInput" placeholder="Paste or type your text here..."></textarea>
+                    <button class="button" onclick="processText()">🚀 Process Text</button>
+                </div>
+
+                <div class="input-section">
+                    <h3>Upload PDF File</h3>
+                    <div class="file-upload" id="fileUpload" onclick="document.getElementById('pdfInput').click()">
+                        <p>📄 Click or drag PDF file here</p>
+                        <input type="file" id="pdfInput" accept=".pdf" style="display:none;" onchange="handlePDFUpload(event)">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Corpus Manager Tab -->
+            <div id="corpus-tab" class="tab-content">
+                <h3>Your Corpora</h3>
+                <div class="corpus-list" id="corpusList">
+                    <p style="color:#6c757d;">No corpora yet. Process some text to get started!</p>
+                </div>
+            </div>
+
+            <!-- Concordance Tab -->
+            <div id="concordance-tab" class="tab-content">
+                <h3>Concordance Search (KWIC)</h3>
+                <div class="search-box">
+                    <input type="text" id="kwicSearch" placeholder="Enter search term...">
+                    <button class="button" onclick="performKWIC()">🔍 Search</button>
+                    <button class="button button-secondary" onclick="exportResults('kwic')">💾 Export</button>
+                </div>
+                <div id="kwicResults" class="analysis-output"></div>
+            </div>
+
+            <!-- Frequency Tab -->
+            <div id="frequency-tab" class="tab-content">
+                <h3>Word Frequency Analysis</h3>
+                <button class="button" onclick="generateFrequency()">📊 Generate Frequency List</button>
+                <button class="button button-secondary" onclick="exportResults('frequency')">💾 Export</button>
+                <div id="frequencyResults" class="analysis-output"></div>
+            </div>
+
+            <!-- Collocation Tab -->
+            <div id="collocation-tab" class="tab-content">
+                <h3>Collocation Analysis</h3>
+                <div class="search-box">
+                    <input type="text" id="collocSearch" placeholder="Enter node word...">
+                    <input type="number" id="collocWindow" value="5" min="1" max="10" placeholder="Window size">
+                    <button class="button" onclick="analyzeCollocations()">🔗 Analyze</button>
+                    <button class="button button-secondary" onclick="exportResults('collocation')">💾 Export</button>
+                </div>
+                <div id="collocationResults" class="analysis-output"></div>
+                <div id="collocationNetwork" class="svg-container"></div>
+            </div>
+
+            <!-- Tag Search Tab -->
+            <div id="tags-tab" class="tab-content">
+                <h3>Tag Search</h3>
+                <div class="search-box">
+                    <select id="tagType">
+                        <option value="pos">POS Tags</option>
+                        <option value="dep">Dependency Tags</option>
+                        <option value="sem">Semantic Tags</option>
+                    </select>
+                    <input type="text" id="tagSearch" placeholder="Enter tag (e.g., NOUN, nsubj, Z1)...">
+                    <button class="button" onclick="searchByTag()">🏷️ Search</button>
+                    <button class="button button-secondary" onclick="exportResults('tags')">💾 Export</button>
+                </div>
+                <div id="tagResults" class="analysis-output"></div>
+            </div>
+
+            <!-- Syntax Trees Tab -->
+            <div id="syntax-tab" class="tab-content">
+                <h3>Dependency Trees</h3>
+                <div class="search-box">
+                    <input type="text" id="sentenceSelect" placeholder="Enter sentence number or leave blank for all...">
+                    <button class="button" onclick="generateSyntaxTrees()">🌳 Generate Trees</button>
+                </div>
+                <div id="syntaxResults"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for corpus naming -->
+    <div id="corpusModal" class="modal">
+        <div class="modal-content">
+            <h3>Name Your Corpus</h3>
+            <input type="text" id="corpusName" placeholder="Enter corpus name...">
+            <div style="margin-top:20px;">
+                <button class="button" onclick="saveCorpus()">Save</button>
+                <button class="button button-secondary" onclick="closeModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let pyodide;
+        let currentText = '';
+        let processedData = null;
+        let corpora = [];
+        let currentCorpus = null;
+
+        // PDF.js worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        async function initPyodide() {
+            try {
+                pyodide = await loadPyodide({
+                    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
+                });
+                
+                updateStatus('pyodide', 'complete', '✓ Pyodide loaded');
+                
+                // Load spaCy
+                updateStatus('spacyStatus', 'loading', 'Installing spaCy...');
+                await pyodide.loadPackage(['micropip']);
+                const micropip = pyodide.pyimport('micropip');
+                
+                await micropip.install('spacy');
+                await micropip.install('spacy-lookups-data');
+                
+                // Download spaCy model
+                await pyodide.runPythonAsync(`
+                    import micropip
+                    await micropip.install('https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.6.0/en_core_web_sm-3.6.0-py3-none-any.whl')
+                `);
+                
+                updateStatus('spacyStatus', 'complete', '✓ spaCy loaded with en_core_web_sm model');
+                
+                // Load PyMUSAS
+                updateStatus('pymusasStatus', 'loading', 'Installing PyMUSAS...');
+                await micropip.install('pymusas');
+                
+                // Initialize models
+                await pyodide.runPythonAsync(`
+                    import spacy
+                    from pymusas.rankers.lexicon_entry import ContextualRuleBasedRanker
+                    from pymusas.taggers.rules.single_word import SingleWordLexiconTagger
+                    from pymusas.spacy_api.taggers import RuleBasedTagger
+                    
+                    nlp = spacy.load('en_core_web_sm')
+                    
+                    # Add PyMUSAS to pipeline
+                    lexicon_tagger = SingleWordLexiconTagger()
+                    ranker = ContextualRuleBasedRanker(*lexicon_tagger.lexicon_states)
+                    
+                    try:
+                        pymusas_tagger = RuleBasedTagger('en', ranker)
+                        nlp.add_pipe(pymusas_tagger, name='pymusas_rule_based_tagger', last=True)
+                        has_pymusas = True
+                    except Exception as e:
+                        print(f"PyMUSAS setup: {e}")
+                        has_pymusas = False
+                `);
+                
+                updateStatus('pymusasStatus', 'complete', '✓ PyMUSAS loaded');
+                
+                // Hide loading, show content
+                document.getElementById('loadingStatus').style.display = 'none';
+                document.getElementById('mainContent').style.display = 'block';
+                
+            } catch (error) {
+                console.error('Error loading:', error);
+                updateStatus('pymusasStatus', 'error', '❌ Error: ' + error.message);
+            }
+        }
+
+        function updateStatus(id, status, text) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            
+            el.className = 'status-item ' + status;
+            const spinner = el.querySelector('.spinner');
+            
+            if (status === 'loading') {
+                spinner.style.display = 'block';
+            } else {
+                spinner.style.display = 'none';
+            }
+            
+            el.querySelector('span').textContent = text;
+        }
+
+        async function processText() {
+            const text = document.getElementById('textInput').value;
+            if (!text.trim()) {
+                alert('Please enter some text first!');
+                return;
+            }
+            
+            currentText = text;
+            
+            try {
+                // Process with spaCy and PyMUSAS
+                const result = await pyodide.runPythonAsync(`
+                    doc = nlp("""${text.replace(/"/g, '\\"')}""")
+                    
+                    tokens = []
+                    for token in doc:
+                        # Get semantic tags
+                        sem_tags = []
+                        if hasattr(token._, 'pymusas_tags') and token._.pymusas_tags:
+                            sem_tags = token._.pymusas_tags
+                        
+                        tokens.append({
+                            'text': token.text,
+                            'lemma': token.lemma_,
+                            'pos': token.pos_,
+                            'tag': token.tag_,
+                            'dep': token.dep_,
+                            'head': token.head.text,
+                            'sem_tags': sem_tags if sem_tags else ['Z99']  # Default if no tag
+                        })
+                    
+                    import json
+                    json.dumps({'tokens': tokens, 'text': doc.text})
+                `);
+                
+                processedData = JSON.parse(result);
+                
+                // Show corpus naming modal
+                document.getElementById('corpusModal').classList.add('show');
+                
+            } catch (error) {
+                console.error('Processing error:', error);
+                alert('Error processing text: ' + error.message);
+            }
+        }
+
+        function saveCorpus() {
+            const name = document.getElementById('corpusName').value.trim();
+            if (!name) {
+                alert('Please enter a corpus name!');
+                return;
+            }
+            
+            const corpus = {
+                id: Date.now(),
+                name: name,
+                text: currentText,
+                data: processedData,
+                wordCount: processedData.tokens.length,
+                created: new Date().toLocaleString()
+            };
+            
+            corpora.push(corpus);
+            currentCorpus = corpus;
+            
+            updateCorpusList();
+            closeModal();
+            
+            alert('✓ Corpus processed and saved!');
+        }
+
+        function closeModal() {
+            document.getElementById('corpusModal').classList.remove('show');
+            document.getElementById('corpusName').value = '';
+        }
+
+        function updateCorpusList() {
+            const list = document.getElementById('corpusList');
+            if (corpora.length === 0) {
+                list.innerHTML = '<p style="color:#6c757d;">No corpora yet. Process some text to get started!</p>';
+                return;
+            }
+            
+            list.innerHTML = corpora.map(c => `
+                <div class="corpus-item" onclick="selectCorpus(${c.id})">
+                    <h4>${c.name}</h4>
+                    <p>Words: ${c.wordCount}</p>
+                    <p>Created: ${c.created}</p>
+                </div>
+            `).join('');
+        }
+
+        function selectCorpus(id) {
+            currentCorpus = corpora.find(c => c.id === id);
+            alert('Selected corpus: ' + currentCorpus.name);
+        }
+
+        async function performKWIC() {
+            if (!currentCorpus) {
+                alert('Please process a text first!');
+                return;
+            }
+            
+            const searchTerm = document.getElementById('kwicSearch').value.toLowerCase();
+            if (!searchTerm) {
+                alert('Please enter a search term!');
+                return;
+            }
+            
+            const tokens = currentCorpus.data.tokens;
+            const results = [];
+            
+            tokens.forEach((token, i) => {
+                if (token.text.toLowerCase().includes(searchTerm)) {
+                    const left = tokens.slice(Math.max(0, i - 5), i).map(t => t.text).join(' ');
+                    const right = tokens.slice(i + 1, Math.min(tokens.length, i + 6)).map(t => t.text).join(' ');
+                    
+                    results.push({
+                        num: results.length + 1,
+                        corpus: currentCorpus.name,
+                        left: left,
+                        node: token.text,
+                        right: right
+                    });
+                }
+            });
+            
+            displayKWIC(results);
+        }
+
+        function displayKWIC(results) {
+            const container = document.getElementById('kwicResults');
+            
+            if (results.length === 0) {
+                container.innerHTML = '<p>No matches found.</p>';
+                return;
+            }
+            
+            const table = `
+                <table class="kwic-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Corpus</th>
+                            <th>Left Context</th>
+                            <th>Node</th>
+                            <th>Right Context</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${results.map(r => `
+                            <tr>
+                                <td>${r.num}</td>
+                                <td>${r.corpus}</td>
+                                <td class="left-context">${r.left}</td>
+                                <td class="node">${r.node}</td>
+                                <td class="right-context">${r.right}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+            
+            container.innerHTML = table;
+        }
+
+        async function generateFrequency() {
+            if (!currentCorpus) {
+                alert('Please process a text first!');
+                return;
+            }
+            
+            const tokens = currentCorpus.data.tokens;
+            const freq = {};
+            
+            tokens.forEach(token => {
+                const word = token.text.toLowerCase();
+                freq[word] = (freq[word] || 0) + 1;
+            });
+            
+            const sorted = Object.entries(freq)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 100);
+            
+            displayFrequency(sorted);
+        }
+
+        function displayFrequency(freq) {
+            const container = document.getElementById('frequencyResults');
+            
+            const html = `
+                <div class="freq-list">
+                    ${freq.map(([word, count]) => `
+                        <div class="freq-item">
+                            <span><strong>${word}</strong></span>
+                            <span>${count}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            container.innerHTML = html;
+        }
+
+        async function analyzeCollocations() {
+            if (!currentCorpus) {
+                alert('Please process a text first!');
+                return;
+            }
+            
+            const nodeWord = document.getElementById('collocSearch').value.toLowerCase();
+            const window = parseInt(document.getElementById('collocWindow').value);
+            
+            if (!nodeWord) {
+                alert('Please enter a node word!');
+                return;
+            }
+            
+            const tokens = currentCorpus.data.tokens;
+            const collocates = {};
+            
+            tokens.forEach((token, i) => {
+                if (token.text.toLowerCase() === nodeWord) {
+                    const start = Math.max(0, i - window);
+                    const end = Math.min(tokens.length, i + window + 1);
+                    
+                    for (let j = start; j < end; j++) {
+                        if (j !== i) {
+                            const word = tokens[j].text.toLowerCase();
+                            collocates[word] = (collocates[word] || 0) + 1;
+                        }
+                    }
+                }
+            });
+            
+            const sorted = Object.entries(collocates)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 20);
+            
+            displayCollocations(nodeWord, sorted);
+            drawCollocationNetwork(nodeWord, sorted);
+        }
+
+        function displayCollocations(node, collocates) {
+            const container = document.getElementById('collocationResults');
+            
+            const html = `
+                <h4>Collocates of "${node}"</h4>
+                <div class="freq-list">
+                    ${collocates.map(([word, count]) => `
+                        <div class="freq-item">
+                            <span><strong>${word}</strong></span>
+                            <span>${count}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            container.innerHTML = html;
+        }
+
+        function drawCollocationNetwork(node, collocates) {
+            const container = document.getElementById('collocationNetwork');
+            const width = 600;
+            const height = 400;
+            
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const radius = 150;
+            
+            let svgContent = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">`;
+            
+            // Draw lines to collocates
+            collocates.forEach(([word, count], i) => {
+                const angle = (i / collocates.length) * 2 * Math.PI;
+                const x = centerX + radius * Math.cos(angle);
+                const y = centerY + radius * Math.sin(angle);
+                const strokeWidth = Math.max(1, count / 2);
+                
+                svgContent += `<line x1="${centerX}" y1="${centerY}" x2="${x}" y2="${y}" stroke="#ccc" stroke-width="${strokeWidth}" />`;
+            });
+            
+            // Draw center node
+            svgContent += `<circle cx="${centerX}" cy="${centerY}" r="30" fill="#667eea" />`;
+            svgContent += `<text x="${centerX}" y="${centerY}" text-anchor="middle" dy=".3em" fill="white" font-weight="bold">${node}</text>`;
+            
+            // Draw collocate nodes
+            collocates.forEach(([word, count], i) => {
+                const angle = (i / collocates.length) * 2 * Math.PI;
+                const x = centerX + radius * Math.cos(angle);
+                const y = centerY + radius * Math.sin(angle);
+                const nodeRadius = Math.max(15, Math.min(25, count * 2));
+                
+                svgContent += `<circle cx="${x}" cy="${y}" r="${nodeRadius}" fill="#764ba2" />`;
+                svgContent += `<text x="${x}" y="${y}" text-anchor="middle" dy=".3em" fill="white" font-size="10">${word}</text>`;
+            });
+            
+            svgContent += `</svg>`;
+            
+            container.innerHTML = svgContent
