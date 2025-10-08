@@ -18,7 +18,7 @@
         // Configure PDF.js worker
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         
-        const BACKEND_URL = 'http://127.0.0.1:5000';
+        const BACKEND_URL = window.location.origin;
         
         let state = {
             corpora: [],
@@ -827,4 +827,5 @@
         render();
     </script>
 </body>
+
 </html>
