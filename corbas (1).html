@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CorBas - Complete Corpus Analysis Tool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        .status-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        .tag-chip { 
+            cursor: pointer; 
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .tag-chip:hover { transform: scale(1.05); }
+        .tag-included { background: #22c55e; color: white; }
+        .tag-excluded { background: #ef4444; color: white; }
+        .tag-neutral { background: #e5e7eb; color: #374151; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 min-h-screen">
+    <div id="app"></div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        
+        // AUTO-DETECT BACKEND URL - Use current page's origin
+        const BACKEND_URL = window.location.origin;
+        
+        console.log('🔧 Backend URL:', BACKEND_URL);
+        
+        // POS Tags with descriptions
+        const POS_TAGS = {
+            'ADJ': 'Adjective', 'ADP': 'Adposition (preposition)', 'ADV': 'Adverb',
+            'AUX': 'Auxiliary verb', 'CCONJ': 'Coordinating conjunction', 'DET': 'Determiner',
+            'INTJ': 'Interjection', 'NOUN': 'Noun', 'NUM': 'Numeral', 'PART': 'Particle',
+            'PRON': 'Pronoun', 'PROPN': 'Proper noun', 'PUNCT': 'Punctuation',
+            'SCONJ': 'Subordinating conjunction', 'SYM': 'Symbol', 'VERB': 'Verb', 'X': 'Other'
+        };
+
+        // Dependency Tags
+        const DEP_TAGS = {
+            'ROOT': 'Root of sentence', 'acl': 'Clausal modifier of noun', 'acomp': 'Adjectival complement',
+            'advcl': 'Adverbial clause modifier', 'advmod': 'Adverbial modifier', 'agent': 'Agent',
+            'amod': 'Adjectival modifier', 'appos': 'Appositional modifier', 'attr': 'Attribute',
+            'aux': 'Auxiliary', 'auxpass': 'Auxiliary (passive)', 'case': 'Case marking',
+            'cc': 'Coordinating conjunction', 'ccomp': 'Clausal complement', 'compound': 'Compound',
+            'conj': 'Conjunct', 'cop': 'Copula', 'csubj': 'Clausal subject', 'dative': 'Dative',
+            'dep': 'Unspecified dependency', 'det': 'Determiner', 'dobj': 'Direct object',
+            'expl': 'Expletive', 'intj': 'Interjection', 'mark': 'Marker', 'meta': 'Meta modifier',
+            'neg': 'Negation modifier', 'nmod': 'Nominal modifier', 'npadvmod': 'Noun phrase adverbial modifier',
+            'nsubj': 'Nominal subject', 'nsubjpass': 'Nominal subject (passive)', 'nummod': 'Numeric modifier',
+            'oprd': 'Object predicate', 'obj': 'Object', 'obl': 'Oblique nominal',
+            'parataxis': 'Parataxis', 'pcomp': 'Complement of preposition', 'pobj': 'Object of preposition',
+            'poss': 'Possession modifier', 'preconj': 'Preconjunct', 'prep': 'Prepositional modifier',
+            'prt': 'Particle', 'punct': 'Punctuation', 'quantmod': 'Quantifier modifier',
+            'relcl': 'Relative clause modifier', 'xcomp': 'Open clausal complement'
+        };
+
+        // Semantic Tags
+        const SEMANTIC_TAGS = {
+            'A1': 'General/abstract', 'A5.1+': 'Evaluation: Good', 'A5.1-': 'Evaluation: Bad',
+            'E1': 'Emotional actions', 'E1.1+': 'Happy', 'E1.1-': 'Sad',
+            'M1': 'Moving, coming, going', 'M7': 'Places', 'N1': 'Numbers', 'O2': 'Objects',
+            'Q2.2': 'Speech acts', 'S1.2': 'Personality traits', 'T1': 'Time: General',
+            'X2.1': 'Thought, belief', 'Z3': 'Personal names', 'Z5': 'Grammatical bin',
+            'Z8': 'Pronouns', 'Z99': 'Unmatched'
+        };
+        
+        let state = {
+            corpora: [],
+            activeTab: 'input',
+            backendStatus: 'checking',
+            processing: false,
+            processingStatus: '',
+            textInput: '',
+            corpusName: '',
+            contextSize: 5,
+            selectedCorpora: [],
+            tagStates: {},
+            activeTagType: 'pos',
+            showTagDropdown: false,
+            highlightColor: '#FFFF00',
+            tagLogic: 'OR',
+            consecutiveMode: false,
+            selectedTagsOrder: [],
+            pdfFile: null
+        };
+
+        async function checkBackendHealth() {
+            try {
+                console.log('🔍 Checking backend health...');
+                const response = await fetch(`${BACKEND_URL}/health`);
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('✅ Backend connected:', data);
+                    state.backendStatus = 'connected';
+                } else {
+                    console.error('❌ Backend error:', response.status);
+                    state.backendStatus = 'error';
+                }
+            } catch (error) {
+                console.error('❌ Backend unreachable:', error);
+                state.backendStatus = 'disconnected';
+            }
+            render();
+        }
+
+        async function processText(text, name) {
+            const response = await fetch(`${BACKEND_URL}/analyze`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, corpus_name: name })
+            });
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.error || `Backend error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            return data.tokens;
+        }
+
+        async function extractPDFText(file) {
+            state.processingStatus = 'Loading PDF...';
+            render();
+
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            const numPages = pdf.numPages;
+
+            state.processingStatus = `Extracting text from ${numPages} pages...`;
+            render();
+
+            const textPromises = [];
+            const pageData = [];
+            
+            for (let i = 1; i <= numPages; i++) {
+                textPromises.push(
+                    pdf.getPage(i).then(page => {
+                        return page.getTextContent().then(content => {
+                            const pageText = content.items.map(item => item.str).join(' ');
+                            pageData.push({ pageNum: i, text: pageText });
+                            return pageText;
+                        });
+                    })
+                );
+            }
+
+            await Promise.all(textPromises);
+            const fullText = pageData.map(p => p.text).join('\n\n');
+
+            return { text: fullText, pages: numPages, pageData: pageData.sort((a, b) => a.pageNum - b.pageNum) };
+        }
+
+        async function handleFileUpload(event) {
+            const files = event.target.files;
+            if (!files.length) return;
+
+            if (state.backendStatus !== 'connected') {
+                alert('Backend is not connected!');
+                return;
+            }
+
+            state.processing = true;
+            render();
+
+            for (const file of files) {
+                try {
+                    let text = '';
+                    let pages = 1;
+                    let pageData = null;
+
+                    if (file.type === 'application/pdf') {
+                        const pdfInfo = await extractPDFText(file);
+                        text = pdfInfo.text;
+                        pages = pdfInfo.pages;
+                        pageData = pdfInfo.pageData;
+                        state.pdfFile = file;
+                    } else {
+                        text = await file.text();
+                    }
+
+                    if (!text.trim()) {
+                        alert(`Could not extract text from ${file.name}`);
+                        continue;
+                    }
+
+                    state.processingStatus = `Analyzing ${file.name} with spaCy + PyMUSAS...`;
+                    render();
+
+                    const tagged = await processText(text, file.name);
+
+                    state.corpora.push({
+                        id: Date.now() + Math.random(),
+                        name: file.name,
+                        text,
+                        tagged,
+                        type: file.type === 'application/pdf' ? 'pdf' : 'text',
+                        pages,
+                        pageData
+                    });
+
+                    state.processingStatus = `✓ ${file.name} analyzed successfully!`;
+                } catch (error) {
+                    alert(`Error processing ${file.name}: ${error.message}`);
+                }
+            }
+
+            state.processing = false;
+            state.processingStatus = '';
+            event.target.value = '';
+            render();
+        }
+
+        async function analyzeText() {
+            if (!state.textInput.trim()) {
+                alert('Please enter some text first');
+                return;
+            }
+
+            if (state.backendStatus !== 'connected') {
+                alert('Backend is not connected!');
+                return;
+            }
+
+            state.processing = true;
+            render();
+
+            try {
+                const name = state.corpusName.trim() || `Text_${Date.now()}`;
+                state.processingStatus = `Analyzing with real spaCy + PyMUSAS...`;
+                render();
+                
+                const tagged = await processText(state.textInput, name);
+
+                state.corpora.push({
+                    id: Date.now(),
+                    name,
+                    text: state.textInput,
+                    tagged,
+                    type: 'text',
+                    pages: 1
+                });
+
+                state.textInput = '';
+                state.corpusName = '';
+                state.activeTab = 'pos';
+                alert(`Success! Analyzed ${tagged.length} tokens.`);
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+
+            state.processing = false;
+            state.processingStatus = '';
+            render();
+        }
+
+        function toggleTag(tag) {
+            const current = state.tagStates[tag] || 'neutral';
+            
+            if (current === 'neutral') {
+                state.tagStates[tag] = 'included';
+                if (!state.selectedTagsOrder.includes(tag)) {
+                    if (state.selectedTagsOrder.length < 3) {
+                        state.selectedTagsOrder.push(tag);
+                    } else {
+                        alert('Maximum 3 tags can be selected!');
+                        state.tagStates[tag] = 'neutral';
+                        render();
+                        return;
+                    }
+                }
+            } else if (current === 'included') {
+                state.tagStates[tag] = 'excluded';
+                state.selectedTagsOrder = state.selectedTagsOrder.filter(t => t !== tag);
+            } else {
+                state.tagStates[tag] = 'neutral';
+            }
+            
+            render();
+        }
+
+        function clearAllTags() {
+            state.tagStates = {};
+            state.selectedTagsOrder = [];
+            render();
+        }
+
+        function getFilteredResults(tagType) {
+            const results = [];
+            const searchCorpora = state.selectedCorpora.length > 0 
+                ? state.corpora.filter(c => state.selectedCorpora.includes(c.id))
+                : state.corpora;
+
+            const includedTags = state.selectedTagsOrder.filter(t => state.tagStates[t] === 'included');
+            const excludedTags = Object.keys(state.tagStates).filter(t => state.tagStates[t] === 'excluded');
+            
+            if (includedTags.length === 0 && excludedTags.length === 0) {
+                return [];
+            }
+
+            searchCorpora.forEach(corpus => {
+                if (!corpus.tagged) return;
+
+                if (state.consecutiveMode && includedTags.length > 1) {
+                    for (let idx = 0; idx < corpus.tagged.length - (includedTags.length - 1); idx++) {
+                        let matches = true;
+                        let nodeWords = [];
+                        
+                        for (let i = 0; i < includedTags.length; i++) {
+                            const token = corpus.tagged[idx + i];
+                            let tagValue = '';
+                            if (tagType === 'pos') tagValue = token.pos;
+                            else if (tagType === 'dep') tagValue = token.dep;
+                            else if (tagType === 'semantic') tagValue = token.semantic;
+
+                            const expectedTag = includedTags[i];
+                            if (!tagValue || tagValue.toUpperCase() !== expectedTag.toUpperCase()) {
+                                matches = false;
+                                break;
+                            }
+                            nodeWords.push(token.word);
+                        }
+
+                        if (matches && excludedTags.length > 0) {
+                            for (let i = 0; i < includedTags.length; i++) {
+                                const token = corpus.tagged[idx + i];
+                                let tagValue = '';
+                                if (tagType === 'pos') tagValue = token.pos;
+                                else if (tagType === 'dep') tagValue = token.dep;
+                                else if (tagType === 'semantic') tagValue = token.semantic;
+
+                                if (excludedTags.some(tag => tagValue && tagValue.toUpperCase() === tag.toUpperCase())) {
+                                    matches = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (matches) {
+                            const left = corpus.tagged
+                                .slice(Math.max(0, idx - state.contextSize), idx)
+                                .map(t => t.word).join(' ');
+                            const right = corpus.tagged
+                                .slice(idx + includedTags.length, Math.min(corpus.tagged.length, idx + includedTags.length + state.contextSize))
+                                .map(t => t.word).join(' ');
+
+                            results.push({
+                                corpusName: corpus.name,
+                                corpusId: corpus.id,
+                                left,
+                                node: nodeWords.join(' '),
+                                right,
+                                pos: corpus.tagged.slice(idx, idx + includedTags.length).map(t => t.pos).join(' + '),
+                                tag: corpus.tagged.slice(idx, idx + includedTags.length).map(t => t.tag).join(' + '),
+                                semantic: corpus.tagged.slice(idx, idx + includedTags.length).map(t => t.semantic).join(' + '),
+                                dep: corpus.tagged.slice(idx, idx + includedTags.length).map(t => t.dep).join(' + ')
+                            });
+                        }
+                    }
+                } else {
+                    corpus.tagged.forEach((token, idx) => {
+                        let tagValue = '';
+                        if (tagType === 'pos') tagValue = token.pos;
+                        else if (tagType === 'dep') tagValue = token.dep;
+                        else if (tagType === 'semantic') tagValue = token.semantic;
+
+                        let matches = false;
+
+                        if (includedTags.length > 0) {
+                            if (state.tagLogic === 'OR') {
+                                matches = includedTags.some(tag => tagValue && tagValue.toUpperCase() === tag.toUpperCase());
+                            } else {
+                                matches = includedTags.some(tag => tagValue && tagValue.toUpperCase() === tag.toUpperCase());
+                            }
+                        }
+
+                        if (matches && excludedTags.length > 0) {
+                            matches = !excludedTags.some(tag => tagValue && tagValue.toUpperCase() === tag.toUpperCase());
+                        }
+
+                        if (matches) {
+                            const left = corpus.tagged
+                                .slice(Math.max(0, idx - state.contextSize), idx)
+                                .map(t => t.word).join(' ');
+                            const right = corpus.tagged
+                                .slice(idx + 1, Math.min(corpus.tagged.length, idx + state.contextSize + 1))
+                                .map(t => t.word).join(' ');
+
+                            results.push({
+                                corpusName: corpus.name,
+                                corpusId: corpus.id,
+                                left,
+                                node: token.word,
+                                right,
+                                pos: token.pos,
+                                tag: token.tag,
+                                semantic: token.semantic,
+                                dep: token.dep
+                            });
+                        }
+                    });
+                }
+            });
+
+            return results;
+        }
+
+        function getNodeFrequency(results) {
+            const freq = {};
+            results.forEach(r => {
+                const word = r.node.toLowerCase();
+                freq[word] = (freq[word] || 0) + 1;
+            });
+            return Object.entries(freq).sort((a, b) => b[1] - a[1]);
+        }
+
+        async function highlightPDF() {
+            if (!state.pdfFile) {
+                alert('Please upload a PDF file first!');
+                return;
+            }
+
+            const results = getFilteredResults(state.activeTagType);
+            const wordsToHighlight = [...new Set(results.map(r => r.node.toLowerCase()))];
+
+            if (wordsToHighlight.length === 0) {
+                alert('No words to highlight! Apply some tag filters first.');
+                return;
+            }
+
+            state.processing = true;
+            state.processingStatus = `Sending to server for highlighting...`;
+            render();
+
+            try {
+                const formData = new FormData();
+                formData.append('file', state.pdfFile);
+                formData.append('phrases', JSON.stringify(wordsToHighlight));
+                formData.append('color', state.highlightColor);
+
+                const response = await fetch(`${BACKEND_URL}/highlight_pdf`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({}));
+                    throw new Error(error.error || `Server error: ${response.status}`);
+                }
+
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = state.pdfFile.name.replace('.pdf', '') + '_highlighted.pdf';
+                a.click();
+                URL.revokeObjectURL(url);
+
+                state.processing = false;
+                state.processingStatus = '';
+                render();
+
+                alert(`✅ Success!\n\nHighlighted ${results.length} occurrences\nUnique phrases: ${wordsToHighlight.length}\n\nDownload started!`);
+
+            } catch (error) {
+                state.processing = false;
+                state.processingStatus = '';
+                render();
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        function exportToCSV(data, filename) {
+            if (!data || data.length === 0) return;
+
+            const headers = Object.keys(data[0]);
+            const csv = [
+                headers.join(','),
+                ...data.map(row => headers.map(h => `"${(row[h] || '').toString().replace(/"/g, '""')}"`).join(','))
+            ].join('\n');
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${filename}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function render() {
+            const app = document.getElementById('app');
+            const results = getFilteredResults(state.activeTagType);
+            const frequency = getNodeFrequency(results);
+
+            app.innerHTML = `
+                <div class="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white p-6 shadow-xl">
+                    <div class="max-w-7xl mx-auto flex items-center justify-between flex-wrap gap-4">
+                        <div>
+                            <h1 class="text-3xl font-bold mb-2">⚡ CorBas</h1>
+                            <p class="text-indigo-100 text-sm">University of Basra • Linguistics</p>
+                        </div>
+                        <div class="text-right">
+                            <div class="inline-flex items-center gap-2 px-4 py-2 rounded-lg ${
+                                state.backendStatus === 'connected' ? 'bg-green-500' :
+                                state.backendStatus === 'checking' ? 'bg-yellow-500' : 'bg-red-500'
+                            }">
+                                <div class="w-2 h-2 rounded-full bg-white ${state.backendStatus === 'connected' ? 'status-dot' : ''}"></div>
+                                <span class="text-sm font-semibold">
+                                    ${state.backendStatus === 'connected' ? 'Connected' : 'Offline'}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                ${state.processing ? `
+                    <div class="bg-yellow-100 border-b-2 border-yellow-300 p-3 text-center">
+                        <span class="text-yellow-900 font-semibold">⏳ ${state.processingStatus || 'Processing...'}</span>
+                    </div>
+                ` : ''}
+
+                <div class="bg-white shadow-md overflow-x-auto">
+                    <div class="max-w-7xl mx-auto flex">
+                        ${renderTab('input', '📝 Input')}
+                        ${renderTab('pos', '🏷️ POS')}
+                        ${renderTab('dep', '🔗 Dependencies')}
+                        ${renderTab('semantic', '📢 Semantic')}
+                        ${renderTab('collocation', '📊 Collocations')}
+                    </div>
+                </div>
+
+                <div class="max-w-7xl mx-auto p-4">
+                    ${state.activeTab === 'input' ? renderInputTab() :
+                      state.activeTab === 'pos' ? renderSearchTab('pos', results, frequency) :
+                      state.activeTab === 'dep' ? renderSearchTab('dep', results, frequency) :
+                      state.activeTab === 'semantic' ? renderSearchTab('semantic', results, frequency) :
+                      renderCollocationTab()}
+                </div>
+
+                <div class="text-center py-6 text-gray-600 text-sm border-t">
+                    <p class="font-semibold">CorBas v3.2 - PythonAnywhere Edition</p>
+                    <p class="text-xs mt-1">Backend: ${BACKEND_URL}</p>
+                </div>
+            `;
+        }
+
+        function renderTab(id, label) {
+            return `<button onclick="state.activeTab='${id}'; render();" 
+                class="px-6 py-4 font-medium transition-all whitespace-nowrap ${
+                    state.activeTab === id 
+                        ? 'bg-indigo-600 text-white border-b-4 border-indigo-700' 
+                        : 'text-gray-600 hover:bg-gray-50'
+                }">${label}</button>`;
+        }
+
+        function renderInputTab() {
+            return `
+                <div class="space-y-4">
+                    <div class="bg-white rounded-2xl shadow-xl p-6">
+                        <h2 class="text-2xl font-bold mb-4">📝 Enter Text</h2>
+                        <div class="space-y-4">
+                            <input type="text" value="${state.corpusName}" oninput="state.corpusName=this.value"
+                                placeholder="Corpus name (optional)" class="w-full p-3 border-2 rounded-xl" ${state.processing ? 'disabled' : ''}>
+                            <textarea oninput="state.textInput=this.value" placeholder="Paste text here..." 
+                                class="w-full h-40 p-4 border-2 rounded-xl resize-none" ${state.processing ? 'disabled' : ''}>${state.textInput}</textarea>
+                            <button onclick="analyzeText()" ${state.processing || !state.textInput.trim() ? 'disabled' : ''}
+                                class="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 disabled:opacity-50">
+                                ⚡ Analyze Text
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl shadow-xl p-6">
+                        <h2 class="text-2xl font-bold mb-4">📄 Upload Files</h2>
+                        <label class="block">
+                            <input type="file" multiple accept=".txt,.pdf" onchange="handleFileUpload(event)" 
+                                class="block w-full text-sm text-gray-500 file:mr-4 file:py-3 file:px-6 file:rounded-xl file:border-0 file:font-semibold file:bg-purple-600 file:text-white hover:file:bg-purple-700"
+                                ${state.processing ? 'disabled' : ''}>
+                        </label>
+                    </div>
+
+                    ${state.corpora.length > 0 ? `
+                        <div class="bg-white rounded-2xl shadow-xl p-6">
+                            <h2 class="text-2xl font-bold mb-4">📚 Your Corpora (${state.corpora.length})</h2>
+                            <div class="space-y-2">
+                                ${state.corpora.map(c => `
+                                    <div class="p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-200">
+                                        <p class="font-semibold text-gray-800">${c.name}</p>
+                                        <p class="text-sm text-gray-600">${c.tagged.length} tokens • ${c.type}</p>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        function renderSearchTab(tagType, results, frequency) {
+            const tagMap = tagType === 'pos' ? POS_TAGS : tagType === 'dep' ? DEP_TAGS : SEMANTIC_TAGS;
+            const title = tagType === 'pos' ? 'POS Tag Search' : tagType === 'dep' ? 'Dependency Search' : 'Semantic Search';
+            const icon = tagType === 'pos' ? '🏷️' : tagType === 'dep' ? '🔗' : '📢';
+
+            return `
+                <div class="bg-white rounded-2xl shadow-xl p-6">
+                    <h2 class="text-2xl font-bold mb-4">${icon} ${title}</h2>
+                    
+                    <div class="space-y-4 mb-6">
+                        <div class="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border-2 border-indigo-200">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="font-bold text-indigo-900">Tag Selection Settings</h3>
+                                <button onclick="clearAllTags()" class="text-sm bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">
+                                    Clear All
+                                </button>
+                            </div>
+                            
+                            ${state.selectedTagsOrder.length > 0 ? `
+                                <div class="mb-3 p-2 bg-white rounded">
+                                    <p class="text-sm font-semibold text-gray-700 mb-1">Selected Tags (in order):</p>
+                                    <div class="flex flex-wrap gap-2">
+                                        ${state.selectedTagsOrder.map((tag, idx) => `
+                                            <span class="bg-green-500 text-white px-3 py-1 rounded-lg font-bold text-sm">
+                                                ${idx + 1}. ${tag}
+                                            </span>
+                                        `).join('')}
+                                    </div>
+                                    <p class="text-xs text-gray-500 mt-1">Maximum 3 tags can be selected</p>
+                                </div>
+                            ` : ''}
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-semibold text-gray-700 mb-2">Logic Mode:</label>
+                                    <div class="flex gap-2">
+                                        <button onclick="state.tagLogic='OR'; state.consecutiveMode=false; render();" 
+                                            class="flex-1 px-4 py-2 rounded-lg font-semibold transition-all ${state.tagLogic === 'OR' && !state.consecutiveMode ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-700'}">
+                                            OR
+                                        </button>
+                                        <button onclick="state.tagLogic='AND'; state.consecutiveMode=false; render();" 
+                                            class="flex-1 px-4 py-2 rounded-lg font-semibold transition-all ${state.tagLogic === 'AND' && !state.consecutiveMode ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-700'}">
+                                            AND
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-semibold text-gray-700 mb-2">Sequence Mode:</label>
+                                    <button onclick="state.consecutiveMode=!state.consecutiveMode; render();" 
+                                        class="w-full px-4 py-2 rounded-lg font-semibold transition-all ${state.consecutiveMode ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-700'}">
+                                        ${state.consecutiveMode ? '✓ Consecutive Tags' : 'Consecutive Tags OFF'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <button onclick="state.showTagDropdown=!state.showTagDropdown; state.activeTagType='${tagType}'; render();"
+                                class="w-full flex items-center justify-between p-3 border-2 rounded-xl hover:border-indigo-500 transition-all">
+                                <span class="font-semibold">Filter by Tags (Click to ${state.showTagDropdown ? 'hide' : 'show'})</span>
+                                <span>${state.showTagDropdown ? '▲' : '▼'}</span>
+                            </button>
+                            
+                            ${state.showTagDropdown && state.activeTagType === tagType ? `
+                                <div class="mt-2 p-4 border-2 rounded-xl bg-gray-50 max-h-96 overflow-y-auto">
+                                    <p class="text-sm text-gray-600 mb-3">
+                                        <span class="font-semibold">Click once</span> to include (green), 
+                                        <span class="font-semibold">twice</span> to exclude (red), 
+                                        <span class="font-semibold">thrice</span> to reset
+                                    </p>
+                                    <div class="flex flex-wrap gap-2">
+                                        ${Object.entries(tagMap).map(([tag, desc]) => {
+                                            const tagState = state.tagStates[tag] || 'neutral';
+                                            return `
+                                                <div onclick="toggleTag('${tag}')" 
+                                                    class="tag-chip tag-${tagState} px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
+                                                    <span class="font-bold">${tag}</span>
+                                                    <span class="text-xs opacity-90">${desc}</span>
+                                                </div>
+                                            `;
+                                        }).join('')}
+                                    </div>
+                                </div>
+                            ` : ''}
+                        </div>
+
+                        <div class="flex items-center gap-4">
+                            <label class="text-sm font-semibold">Context: ${state.contextSize}</label>
+                            <input type="range" min="2" max="15" value="${state.contextSize}" 
+                                oninput="state.contextSize=parseInt(this.value); render();" class="flex-1">
+                        </div>
+
+                        ${state.pdfFile ? `
+                            <div class="flex items-center gap-3 p-4 bg-green-50 border-2 border-green-200 rounded-xl">
+                                <div class="flex-1">
+                                    <p class="font-semibold text-green-900">✓ PDF Ready: ${state.pdfFile.name}</p>
+                                    <p class="text-sm text-green-700">Server-side highlighting using PyMuPDF</p>
+                                </div>
+                                <input type="color" value="${state.highlightColor}" 
+                                    oninput="state.highlightColor=this.value; render();" 
+                                    class="w-12 h-12 rounded cursor-pointer">
+                                <button onclick="highlightPDF()" 
+                                    class="bg-yellow-500 text-white px-6 py-3 rounded-lg hover:bg-yellow-600 font-semibold">
+                                    🖍️ Highlight PDF
+                                </button>
+                            </div>
+                        ` : ''}
+                    </div>
+
+                    ${results.length === 0 ? `
+                        <p class="text-gray-500 text-center py-12">No matches. Try adjusting your tag filters.</p>
+                    ` : `
+                        <div class="space-y-6">
+                            <div class="flex justify-between items-center p-4 bg-indigo-50 rounded-xl">
+                                <div>
+                                    <p class="font-semibold text-indigo-900">${results.length} results found</p>
+                                    <p class="text-sm text-indigo-700">${frequency.length} unique words</p>
+                                </div>
+                                <button onclick='exportToCSV(${JSON.stringify(results.map((r, i) => ({Number: i+1, ...r})))}, "${tagType}_results")'
+                                    class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 font-semibold">
+                                    💾 Export to Excel
+                                </button>
+                            </div>
+
+                            <div class="p-4 bg-blue-50 rounded-xl">
+                                <h3 class="font-bold text-blue-900 mb-3">📊 Word Frequency</h3>
+                                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 max-h-64 overflow-y-auto">
+                                    ${frequency.slice(0, 50).map(([word, count]) => `
+                                        <div class="flex items-center justify-between p-2 bg-white rounded-lg">
+                                            <span class="font-medium text-sm">${word}</span>
+                                            <span class="text-blue-600 font-bold text-sm">${count}</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+
+                            <div class="overflow-x-auto border-2 rounded-xl">
+                                <table class="w-full">
+                                    <thead class="bg-indigo-100">
+                                        <tr>
+                                            <th class="p-3 text-left font-bold">No.</th>
+                                            <th class="p-3 text-left font-bold">Corpus</th>
+                                            <th class="p-3 text-left font-bold">Left</th>
+                                            <th class="p-3 text-center font-bold">Node</th>
+                                            <th class="p-3 text-left font-bold">Right</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${results.map((r, i) => `
+                                            <tr class="border-b hover:bg-indigo-50">
+                                                <td class="p-3">${i + 1}</td>
+                                                <td class="p-3 text-sm">${r.corpusName}</td>
+                                                <td class="p-3 text-sm text-right text-gray-600">${r.left}</td>
+                                                <td class="p-3 text-center">
+                                                    <span class="font-bold text-indigo-700 bg-indigo-100 px-3 py-1 rounded">${r.node}</span>
+                                                    <div class="text-xs text-gray-500 mt-1">
+                                                        ${tagType === 'pos' ? `${r.pos} / ${r.tag}` : 
+                                                          tagType === 'dep' ? r.dep : 
+                                                          r.semantic}
+                                                    </div>
+                                                </td>
+                                                <td class="p-3 text-sm text-gray-600">${r.right}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `}
+                </div>
+            `;
+        }
+
+        function renderCollocationTab() {
+            const allWords = state.corpora.flatMap(c => (c.tagged || []).map(t => t.word.toLowerCase()));
+            if (allWords.length < 2) {
+                return `
+                    <div class="bg-white rounded-2xl shadow-xl p-6">
+                        <h2 class="text-2xl font-bold mb-6">📊 Collocation Network</h2>
+                        <p class="text-gray-500 text-center py-12">Upload a corpus to view collocations</p>
+                    </div>
+                `;
+            }
+
+            const bigrams = {};
+            for (let i = 0; i < allWords.length - 1; i++) {
+                const bigram = `${allWords[i]}|${allWords[i + 1]}`;
+                bigrams[bigram] = (bigrams[bigram] || 0) + 1;
+            }
+
+            const topBigrams = Object.entries(bigrams)
+                .filter(([_, count]) => count > 1)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 20);
+
+            if (topBigrams.length === 0) {
+                return `
+                    <div class="bg-white rounded-2xl shadow-xl p-6">
+                        <h2 class="text-2xl font-bold mb-6">📊 Collocation Analysis</h2>
+                        <p class="text-gray-500 text-center py-12">No repeated word pairs found</p>
+                    </div>
+                `;
+            }
+
+            const width = 800;
+            const height = 600;
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const radius = 220;
+
+            const uniqueWords = [...new Set(topBigrams.flatMap(([bigram]) => bigram.split('|')))];
+
+            let svg = `<svg width="100%" height="${height}" viewBox="0 0 ${width} ${height}" class="border-2 border-purple-100 rounded-lg bg-white">`;
+
+            topBigrams.forEach(([bigram, count]) => {
+                const [word1, word2] = bigram.split('|');
+                const idx1 = uniqueWords.indexOf(word1);
+                const idx2 = uniqueWords.indexOf(word2);
+
+                const angle1 = (idx1 / uniqueWords.length) * 2 * Math.PI - Math.PI / 2;
+                const angle2 = (idx2 / uniqueWords.length) * 2 * Math.PI - Math.PI / 2;
+
+                const x1 = centerX + radius * Math.cos(angle1);
+                const y1 = centerY + radius * Math.sin(angle1);
+                const x2 = centerX + radius * Math.cos(angle2);
+                const y2 = centerY + radius * Math.sin(angle2);
+
+                svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" 
+                    stroke="#a855f7" stroke-width="${Math.min(count * 2, 10)}" opacity="0.5"/>`;
+            });
+
+            uniqueWords.forEach((word, idx) => {
+                const angle = (idx / uniqueWords.length) * 2 * Math.PI - Math.PI / 2;
+                const x = centerX + radius * Math.cos(angle);
+                const y = centerY + radius * Math.sin(angle);
+
+                const displayWord = word.length > 10 ? word.substring(0, 9) + '..' : word;
+                svg += `<circle cx="${x}" cy="${y}" r="35" fill="#8b5cf6" opacity="0.9" stroke="#6d28d9" stroke-width="3"/>
+                    <text x="${x}" y="${y + 5}" text-anchor="middle" class="text-sm font-bold fill-white">${displayWord}</text>`;
+            });
+
+            svg += '</svg>';
+
+            return `
+                <div class="bg-white rounded-2xl shadow-xl p-6">
+                    <h2 class="text-2xl font-bold mb-6">📊 Collocation Network</h2>
+                    <div class="space-y-6">
+                        <p class="text-sm text-gray-600 bg-purple-50 p-4 rounded-lg">
+                            Network showing top ${topBigrams.length} most frequent word pairs.
+                        </p>
+                        <div class="flex justify-center">${svg}</div>
+                        <div class="p-4 bg-purple-50 rounded-xl">
+                            <h3 class="font-bold text-purple-900 mb-2">Top Collocations:</h3>
+                            <div class="grid grid-cols-2 gap-2">
+                                ${topBigrams.map(([bigram, count]) => {
+                                    const [w1, w2] = bigram.split('|');
+                                    return `
+                                        <div class="flex items-center justify-between p-2 bg-white rounded">
+                                            <span class="text-sm">${w1} → ${w2}</span>
+                                            <span class="text-purple-600 font-bold text-sm">${count}x</span>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        checkBackendHealth();
+        setInterval(checkBackendHealth, 10000);
+        render();
+    </script>
+</body>
+</html>
